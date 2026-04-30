@@ -1,1 +1,5 @@
 @import "tailwindcss";
+@keyframes pulse {
+  from { transform: scaleY(0.4); }
+  to { transform: scaleY(1); }
+}

@@ -43,7 +43,8 @@ export default function CreateRoom() {
         }
       })
       setRoomCode(res.data.roomCode)
-      navigate(`/room/${res.data.roomCode}`)
+      // pass host name in URL just like guests do
+      navigate(`/room/${res.data.roomCode}?name=${encodeURIComponent(user.name)}`)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create room')
     } finally {
