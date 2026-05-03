@@ -47,7 +47,7 @@ export default function Room() {
   const playerPollRef = useRef(null)
   const queueRefillRef = useRef(null)
   const peakUsersRef = useRef(1)
-  const lastRefillRef = useRef(0)
+  
 
   useEffect(() => {
     const name = searchParams.get('name') || user?.name
@@ -97,31 +97,41 @@ export default function Room() {
     return () => clearInterval(playerPollRef.current)
   }, [isHost])
 
-  useEffect(() => {
+  // interval based refill — runs every 30 seconds regardless
+useEffect(() => {
   if (!isHost) return
 
-  async function refillQueue() {
-    const now = Date.now()
-    if (now - lastRefillRef.current < 15000) return
+  queueRefillRef.current = setInterval(async () => {
     if (queue.length >= 3) return
-
-    lastRefillRef.current = now
 
     const tracks = await getRecommendations()
     if (!tracks.length) return
 
     for (const track of tracks.slice(0, 2)) {
       const success = await addToQueue(track)
-      if (success) {
-        emitTrackQueued(roomCode, track)
-      }
+      if (success) emitTrackQueued(roomCode, track)
+    }
+  }, 30000)
+
+  return () => clearInterval(queueRefillRef.current)
+}, [isHost])
+
+// mood change triggered refill — fires when mood shifts quadrant
+useEffect(() => {
+  if (!isHost) return
+  if (queue.length >= 3) return
+
+  async function refillOnMoodChange() {
+    const tracks = await getRecommendations()
+    if (!tracks.length) return
+
+    for (const track of tracks.slice(0, 2)) {
+      const success = await addToQueue(track)
+      if (success) emitTrackQueued(roomCode, track)
     }
   }
 
-  refillQueue()
-  queueRefillRef.current = setInterval(refillQueue, 30000)
-
-  return () => clearInterval(queueRefillRef.current)
+  refillOnMoodChange()
 }, [isHost, negotiatedMood])
 
   function handleMoodChange(newMood) {

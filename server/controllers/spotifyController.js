@@ -1,22 +1,29 @@
 import axios from 'axios'
 import Room from '../models/Room.js'
 import {
-  negotiateMood,
-  applyMomentum,
-  buildSpotifyParams,
-  filterVetoed
+  filterVetoed,
+  getQuadrant,
+  getQuadrantProfile,
+  shuffleArray
 } from '../utils/moodEngine.js'
 
 // ─────────────────────────────────────────────
-// helper — always get a fresh valid token
+// helper — get token from session or header
 // ─────────────────────────────────────────────
 
 async function getValidToken(req) {
-  if (!req.session.accessToken) {
-    throw new Error('No access token in session')
+  const tokenFromHeader = req.headers['x-access-token']
+
+  if (!req.session.accessToken && !tokenFromHeader) {
+    throw new Error('No access token available')
   }
 
-  // refresh if token is within 5 minutes of expiry
+  // no session token — use header token directly
+  if (!req.session.accessToken && tokenFromHeader) {
+    return tokenFromHeader
+  }
+
+  // refresh session token if expiring soon
   if (Date.now() > req.session.tokenExpiry - 5 * 60 * 1000) {
     const credentials = Buffer.from(
       `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
@@ -44,12 +51,19 @@ async function getValidToken(req) {
 }
 
 // ─────────────────────────────────────────────
-// POST /api/spotify/recommendations
-// called internally when queue needs refilling
+// auth check helper
+// ─────────────────────────────────────────────
+
+function isAuthorized(req) {
+  return !!(req.session.user || req.headers['x-access-token'])
+}
+
+// ─────────────────────────────────────────────
+// POST /api/rooms/spotify/recommendations
 // ─────────────────────────────────────────────
 
 export async function getRecommendations(req, res) {
-  if (!req.session.user) {
+  if (!isAuthorized(req)) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
@@ -66,21 +80,21 @@ export async function getRecommendations(req, res) {
     }
 
     const token = await getValidToken(req)
-    const params = buildSpotifyParams(
-      room.negotiatedMood,
-      room.genreLock,
-      vetoedTrackIds
-    )
+    const mood = room.negotiatedMood || { x: 0.5, y: 0.5 }
+    const quadrant = getQuadrant(mood)
+    const profile = getQuadrantProfile(quadrant)
+    const genre = room.genreLock || shuffleArray(profile.genres)[0] || 'pop'
 
-    const response = await axios.get(
-      'https://api.spotify.com/v1/recommendations',
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params
-      }
-    )
+    const response = await axios.get('https://api.spotify.com/v1/search', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: {
+      q: genre,
+      type: 'track',
+      limit: 10
+    }
+    })
 
-    let tracks = response.data.tracks.map(track => ({
+    let tracks = response.data.tracks.items.map(track => ({
       id: track.id,
       name: track.name,
       artist: track.artists.map(a => a.name).join(', '),
@@ -90,24 +104,23 @@ export async function getRecommendations(req, res) {
       preview_url: track.preview_url
     }))
 
-    // filter vetoed tracks
     tracks = filterVetoed(tracks, vetoedTrackIds)
+    tracks = shuffleArray(tracks).slice(0, 10)
 
     res.json({ tracks, mood: room.negotiatedMood })
 
   } catch (err) {
-    console.error('Recommendations error:', err.message)
+    console.error('Recommendations error:', err.response?.status, err.response?.data)
     res.status(500).json({ error: 'Failed to get recommendations' })
   }
 }
 
 // ─────────────────────────────────────────────
-// POST /api/spotify/queue
-// adds a single track to host spotify queue
+// POST /api/rooms/spotify/queue
 // ─────────────────────────────────────────────
 
 export async function addToQueue(req, res) {
-  if (!req.session.user) {
+  if (!isAuthorized(req)) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
@@ -126,7 +139,6 @@ export async function addToQueue(req, res) {
       { headers: { Authorization: `Bearer ${token}` } }
     )
 
-    // save track to room history
     if (roomCode) {
       const room = await Room.findOne({
         roomCode: roomCode.toUpperCase(),
@@ -134,7 +146,6 @@ export async function addToQueue(req, res) {
       })
 
       if (room) {
-        // extract track info from request body
         const { trackName, trackArtist, trackAlbumArt, trackId } = req.body
 
         room.trackHistory.push({
@@ -156,14 +167,12 @@ export async function addToQueue(req, res) {
   } catch (err) {
     console.error('Add to queue error:', err.message)
 
-    // spotify returns 404 if no active device
     if (err.response?.status === 404) {
       return res.status(404).json({
         error: 'No active Spotify device found. Open Spotify and play something first.'
       })
     }
 
-    // premium required error
     if (err.response?.status === 403) {
       return res.status(403).json({
         error: 'Spotify Premium is required to control the queue.'
@@ -175,12 +184,11 @@ export async function addToQueue(req, res) {
 }
 
 // ─────────────────────────────────────────────
-// GET /api/spotify/search?q=query
-// search for a specific track (host manual add)
+// GET /api/rooms/spotify/search
 // ─────────────────────────────────────────────
 
 export async function searchTracks(req, res) {
-  if (!req.session.user) {
+  if (!isAuthorized(req)) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
@@ -195,11 +203,7 @@ export async function searchTracks(req, res) {
 
     const response = await axios.get('https://api.spotify.com/v1/search', {
       headers: { Authorization: `Bearer ${token}` },
-      params: {
-        q,
-        type: 'track',
-        limit: 8
-      }
+      params: { q, type: 'track', limit: '8', market: 'US' }
     })
 
     const tracks = response.data.tracks.items.map(track => ({
@@ -221,12 +225,11 @@ export async function searchTracks(req, res) {
 }
 
 // ─────────────────────────────────────────────
-// GET /api/spotify/player
-// get current playback state
+// GET /api/rooms/spotify/player
 // ─────────────────────────────────────────────
 
 export async function getPlayer(req, res) {
-  if (!req.session.user) {
+  if (!isAuthorized(req)) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
@@ -237,7 +240,6 @@ export async function getPlayer(req, res) {
       headers: { Authorization: `Bearer ${token}` }
     })
 
-    // 204 means no active player
     if (response.status === 204 || !response.data) {
       return res.json({ isPlaying: false, track: null })
     }

@@ -15,7 +15,7 @@ const sessionSchema = new mongoose.Schema({
     required: true
   },
   duration: {
-    type: Number, // in minutes
+    type: Number,
     default: 0
   },
   peakUserCount: {
@@ -51,9 +51,9 @@ const sessionSchema = new mongoose.Schema({
     }
   ],
   moodSummary: {
-    averageEnergy: { type: Number },    // average x over session
-    averageValence: { type: Number },   // average y over session
-    dominantQuadrant: { type: String }  // e.g. 'hype', 'chill', 'melancholic', 'focus'
+    averageEnergy: { type: Number },
+    averageValence: { type: Number },
+    dominantQuadrant: { type: String }
   },
   createdAt: {
     type: Date,
@@ -61,12 +61,19 @@ const sessionSchema = new mongoose.Schema({
   }
 })
 
-// auto compute mood summary before saving
 sessionSchema.pre('save', function (next) {
-  if (this.moodHistory.length === 0) return next()
+  if (!this.moodHistory || this.moodHistory.length === 0) {
+    if (!this.moodSummary) this.moodSummary = {}
+    this.moodSummary.averageEnergy = 0.5
+    this.moodSummary.averageValence = 0.5
+    this.moodSummary.dominantQuadrant = 'chill'
+    return next()
+  }
 
-  const totalX = this.moodHistory.reduce((sum, s) => sum + s.negotiatedMood.x, 0)
-  const totalY = this.moodHistory.reduce((sum, s) => sum + s.negotiatedMood.y, 0)
+  const totalX = this.moodHistory.reduce((sum, s) => sum + (s.negotiatedMood?.x || 0), 0)
+  const totalY = this.moodHistory.reduce((sum, s) => sum + (s.negotiatedMood?.y || 0), 0)
+
+  if (!this.moodSummary) this.moodSummary = {}
 
   this.moodSummary.averageEnergy = totalX / this.moodHistory.length
   this.moodSummary.averageValence = totalY / this.moodHistory.length
@@ -74,13 +81,12 @@ sessionSchema.pre('save', function (next) {
   const x = this.moodSummary.averageEnergy
   const y = this.moodSummary.averageValence
 
-  // quadrant mapping
   if (x >= 0.5 && y >= 0.5) this.moodSummary.dominantQuadrant = 'hype'
   else if (x >= 0.5 && y < 0.5) this.moodSummary.dominantQuadrant = 'intense'
   else if (x < 0.5 && y >= 0.5) this.moodSummary.dominantQuadrant = 'chill'
   else this.moodSummary.dominantQuadrant = 'melancholic'
 
-  next()
+  return next()
 })
 
 export default mongoose.model('Session', sessionSchema)
