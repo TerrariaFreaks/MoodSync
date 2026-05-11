@@ -63,6 +63,17 @@ const roomSchema = new mongoose.Schema({
     x: { type: Number, default: 0.5 },
     y: { type: Number, default: 0.5 }
   },
+  trackPool: [
+    {
+      spotifyId: { type: String, required: true },
+      name: { type: String, required: true },
+      artist: { type: String, required: true },
+      uri: { type: String, required: true },
+      albumArt: { type: String },
+      moodTags: [{ type: String }],      // ['hype', 'chill', 'intense', 'melancholic']
+      contributedBy: { type: String }    // display name of who added it
+    }
+  ],
   createdAt: {
     type: Date,
     default: Date.now

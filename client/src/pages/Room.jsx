@@ -8,6 +8,8 @@ import RoomUsers from '../components/RoomUsers'
 import Queue from '../components/Queue'
 import NowPlaying from '../components/NowPlaying'
 import MoodPresets from '../components/MoodPresets'
+import SpotifyConnect from '../components/SpotifyConnect'
+import Player from '../components/Player'
 
 export default function Room() {
   const { roomCode } = useParams()
@@ -22,7 +24,8 @@ export default function Room() {
     moodLabel,
     queue,
     nowPlaying,
-    setRoomCode
+    setRoomCode,
+    setQueue
   } = useRoom()
 
   const {
@@ -35,7 +38,7 @@ export default function Room() {
     getSocketId
   } = useSocket()
 
-  const { getRecommendations, addToQueue, getPlayer, endRoom } = useSpotify()
+  const { getPlayer, endRoom } = useSpotify()
 
   const [myMood, setMyMood] = useState({ x: 0.5, y: 0.5 })
   const [mySocketId, setMySocketId] = useState(null)
@@ -97,42 +100,16 @@ export default function Room() {
     return () => clearInterval(playerPollRef.current)
   }, [isHost])
 
-  // interval based refill — runs every 30 seconds regardless
-useEffect(() => {
-  if (!isHost) return
 
-  queueRefillRef.current = setInterval(async () => {
-    if (queue.length >= 3) return
-
-    const tracks = await getRecommendations()
-    if (!tracks.length) return
-
-    for (const track of tracks.slice(0, 2)) {
-      const success = await addToQueue(track)
-      if (success) emitTrackQueued(roomCode, track)
-    }
-  }, 30000)
-
-  return () => clearInterval(queueRefillRef.current)
-}, [isHost])
-
-// mood change triggered refill — fires when mood shifts quadrant
-useEffect(() => {
-  if (!isHost) return
-  if (queue.length >= 3) return
-
-  async function refillOnMoodChange() {
-    const tracks = await getRecommendations()
-    if (!tracks.length) return
-
-    for (const track of tracks.slice(0, 2)) {
-      const success = await addToQueue(track)
-      if (success) emitTrackQueued(roomCode, track)
-    }
+  function handleTracksLoaded(tracks) {
+    tracks.forEach(t => {
+      setQueue(prev => {
+        const exists = prev.find(q => q.id === t.id)
+        if (exists) return prev
+        return [...prev, t]
+      })
+    })
   }
-
-  refillOnMoodChange()
-}, [isHost, negotiatedMood])
 
   function handleMoodChange(newMood) {
     setMyMood(newMood)
@@ -204,7 +181,16 @@ useEffect(() => {
       </div>
 
       {/* now playing bar */}
-      {nowPlaying && <NowPlaying track={nowPlaying} />}
+            {isHost ? (
+        <Player
+          roomCode={roomCode}
+          isHost={isHost}
+          negotiatedMood={negotiatedMood}
+          onTracksLoaded={handleTracksLoaded}
+        />
+      ) : (
+        nowPlaying && <NowPlaying track={nowPlaying} />
+      )}
 
       {/* main content */}
       <div className="flex flex-1 overflow-hidden">
@@ -224,6 +210,16 @@ useEffect(() => {
           />
 
           <MoodPresets onSelect={handleMoodChange} />
+          {!isHost && (
+          <div className="mt-4 w-full max-w-xs">
+            <SpotifyConnect
+              displayName={displayName}
+              onContributed={(data) => {
+                console.log(`Pool updated: ${data.totalPoolSize} total tracks`)
+              }}
+            />
+          </div>
+        )}
         </div>
 
         {/* right panel */}

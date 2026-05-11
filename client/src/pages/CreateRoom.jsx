@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { useRoom } from '../context/RoomContext'
+import { useSpotify } from '../hooks/useSpotify'
 
 const SERVER = import.meta.env.VITE_SERVER_URL
 
 export default function CreateRoom() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user, setUser, tokens, setTokens, setIsHost, setRoomCode } = useRoom()
+  const { user, setUser, tokens, setTokens, setIsHost, setRoomCode, roomCode } = useRoom()
+  const { contributePlaylists } = useSpotify()
   const [loading, setLoading] = useState(false)
+  const [loadingStep, setLoadingStep] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -36,19 +39,41 @@ export default function CreateRoom() {
     setError('')
 
     try {
+      // step 1 — create the room
+      setLoadingStep('Creating room...')
       const res = await axios.post(`${SERVER}/api/rooms/create`, {}, {
         withCredentials: true,
-        headers: {
-          'x-access-token': tokens?.accessToken
-        }
+        headers: { 'x-access-token': tokens?.accessToken }
       })
-      setRoomCode(res.data.roomCode)
-      // pass host name in URL just like guests do
-      navigate(`/room/${res.data.roomCode}?name=${encodeURIComponent(user.name)}`)
+
+      const newRoomCode = res.data.roomCode
+      setRoomCode(newRoomCode)
+
+      // step 2 — contribute host playlists to pool
+      setLoadingStep('Loading your music...')
+      try {
+        const contribution = await axios.post(
+          `${SERVER}/api/rooms/${newRoomCode}/contribute-playlists`,
+          { displayName: user.name },
+          {
+            withCredentials: true,
+            headers: { 'x-access-token': tokens?.accessToken }
+          }
+        )
+        console.log(`Host contributed ${contribution.data.tracksAdded} tracks`)
+      } catch (playlistErr) {
+        // non fatal — room still works without pool
+        console.error('Playlist contribution failed:', playlistErr.message)
+      }
+
+      // step 3 — navigate to room
+      navigate(`/room/${newRoomCode}?name=${encodeURIComponent(user.name)}`)
+
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create room')
     } finally {
       setLoading(false)
+      setLoadingStep('')
     }
   }
 
@@ -80,21 +105,30 @@ export default function CreateRoom() {
         </div>
 
         <h2 className="text-xl font-semibold mb-2 text-white">Ready to host?</h2>
-        <p className="text-zinc-400 text-sm mb-8">
-          Create a room and share the code with your friends. Their mood shapes the music.
+        <p className="text-zinc-400 text-sm mb-2">
+          Create a room and share the code with your friends.
+        </p>
+        <p className="text-zinc-600 text-xs mb-8">
+          Your playlists will be used to build a shared music pool.
         </p>
 
         {error && (
           <p className="text-red-400 text-sm mb-4">{error}</p>
         )}
 
-        <button
-          onClick={handleCreateRoom}
-          disabled={loading}
-          className="w-full bg-[#1DB954] hover:bg-[#1ed760] disabled:opacity-50 text-black font-semibold py-4 rounded-full text-base transition-all duration-200"
-        >
-          {loading ? 'Creating...' : 'Create Room'}
-        </button>
+        {loading ? (
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-[#1DB954] border-t-transparent rounded-full animate-spin" />
+            <p className="text-zinc-400 text-sm">{loadingStep}</p>
+          </div>
+        ) : (
+          <button
+            onClick={handleCreateRoom}
+            className="w-full bg-[#1DB954] hover:bg-[#1ed760] text-black font-semibold py-4 rounded-full text-base transition-all duration-200"
+          >
+            Create Room
+          </button>
+        )}
 
       </div>
 

@@ -12,6 +12,7 @@ import {
   searchTracks,
   getPlayer
 } from '../controllers/spotifyController.js'
+import { contributePlaylists, getPoolStats } from '../controllers/playlistController.js'
 
 const router = express.Router()
 
@@ -33,5 +34,8 @@ router.post('/spotify/recommendations', getRecommendations)
 router.post('/spotify/queue', addToQueue)
 router.get('/spotify/search', searchTracks)
 router.get('/spotify/player', getPlayer)
+
+router.post('/:roomCode/contribute-playlists', contributePlaylists)
+router.get('/:roomCode/pool-stats', getPoolStats)
 
 export default router

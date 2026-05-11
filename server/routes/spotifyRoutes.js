@@ -14,7 +14,10 @@ const SCOPES = [
   'user-read-email',
   'user-modify-playback-state',
   'user-read-playback-state',
-  'streaming'
+  'streaming',
+  'playlist-read-private',
+  'playlist-read-collaborative',
+  'user-library-read'
 ].join(' ')
 
 router.get('/login', (req, res) => {
@@ -137,5 +140,91 @@ router.get('/logout', (req, res) => {
   req.session.destroy()
   res.json({ success: true })
 })
+
+// guest login — opens spotify auth with limited scopes
+router.get('/guest-login', (req, res) => {
+  const params = new URLSearchParams({
+    client_id: process.env.SPOTIFY_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: process.env.SPOTIFY_GUEST_REDIRECT_URI,
+    scope: 'playlist-read-private playlist-read-collaborative',
+    show_dialog: true
+  })
+  res.redirect(`${SPOTIFY_AUTH_URL}?${params.toString()}`)
+})
+
+// guest callback — closes popup and sends token back to parent window
+router.get('/guest-callback', async (req, res) => {
+  const { code, error } = req.query
+
+  if (error) {
+    return res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'SPOTIFY_TOKEN', accessToken: null }, '*')
+        window.close()
+      </script>
+    `)
+  }
+
+  try {
+    const credentials = Buffer.from(
+      `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
+    ).toString('base64')
+
+    const response = await axios.post(SPOTIFY_TOKEN_URL,
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.SPOTIFY_GUEST_REDIRECT_URI
+      }),
+      {
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      }
+    )
+
+    const { access_token } = response.data
+
+    res.send(`
+      <script>
+        window.opener?.postMessage({
+          type: 'SPOTIFY_TOKEN',
+          accessToken: '${access_token}'
+        }, '*')
+        window.close()
+      </script>
+    `)
+
+  } catch (err) {
+    console.error('Guest callback error:', err.message)
+    res.send(`
+      <script>
+        window.opener?.postMessage({ type: 'SPOTIFY_TOKEN', accessToken: null }, '*')
+        window.close()
+      </script>
+    `)
+  }
+})
+
+router.get('/test-playlist', async (req, res) => {
+  try {
+    const token = req.session.accessToken
+    if (!token) return res.json({ error: 'no token - login first' })
+
+    const response = await axios.get(
+      'https://api.spotify.com/v1/playlists/4RuEr8zXWEubJy9VeiM8SO/tracks',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: 5 }
+      }
+    )
+    res.json(response.data)
+  } catch (err) {
+    res.json({ error: err.response?.data || err.message })
+  }
+})
+
 
 export default router

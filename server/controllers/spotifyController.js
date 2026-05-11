@@ -79,38 +79,119 @@ export async function getRecommendations(req, res) {
       return res.status(404).json({ error: 'Room not found' })
     }
 
-    const token = await getValidToken(req)
     const mood = room.negotiatedMood || { x: 0.5, y: 0.5 }
     const quadrant = getQuadrant(mood)
-    const profile = getQuadrantProfile(quadrant)
-    const genre = room.genreLock || shuffleArray(profile.genres)[0] || 'pop'
+    const token = await getValidToken(req)
 
-    const response = await axios.get('https://api.spotify.com/v1/search', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-      q: genre,
-      type: 'track',
-      limit: 10
+    const BATCH_SIZE = 10
+    const POOL_WEIGHT = 0.7    // 70% from pool
+    const DISCOVERY_WEIGHT = 0.2 // 20% from search
+    // remaining 10% is random from pool regardless of mood
+
+    const fromPoolCount = Math.floor(BATCH_SIZE * POOL_WEIGHT)
+    const fromSearchCount = Math.floor(BATCH_SIZE * DISCOVERY_WEIGHT)
+    const wildcardCount = BATCH_SIZE - fromPoolCount - fromSearchCount
+
+    let finalTracks = []
+
+    // ── 70% from pool filtered by mood ──
+    if (room.trackPool.length > 0) {
+      const moodMatched = room.trackPool.filter(t =>
+        t.moodTags.includes(quadrant) &&
+        !vetoedTrackIds.includes(t.spotifyId)
+      )
+
+      const fallback = room.trackPool.filter(t =>
+        !vetoedTrackIds.includes(t.spotifyId)
+      )
+
+      const source = moodMatched.length >= fromPoolCount ? moodMatched : fallback
+      const poolTracks = shuffleArray(source).slice(0, fromPoolCount)
+
+      finalTracks.push(...poolTracks.map(t => ({
+        id: t.spotifyId,
+        name: t.name,
+        artist: t.artist,
+        albumArt: t.albumArt,
+        uri: t.uri,
+        source: 'pool'
+      })))
+
+      // ── 10% wildcard — random from pool, any mood ──
+      const remaining = fallback.filter(t =>
+        !finalTracks.find(f => f.id === t.spotifyId)
+      )
+      const wildcards = shuffleArray(remaining).slice(0, wildcardCount)
+      finalTracks.push(...wildcards.map(t => ({
+        id: t.spotifyId,
+        name: t.name,
+        artist: t.artist,
+        albumArt: t.albumArt,
+        uri: t.uri,
+        source: 'wildcard'
+      })))
     }
-    })
 
-    let tracks = response.data.tracks.items.map(track => ({
-      id: track.id,
-      name: track.name,
-      artist: track.artists.map(a => a.name).join(', '),
-      albumArt: track.album.images?.[0]?.url || null,
-      uri: track.uri,
-      duration_ms: track.duration_ms,
-      preview_url: track.preview_url
-    }))
+    // ── 20% from spotify search — discovery tracks ──
+    try {
+      const profile = getQuadrantProfile(quadrant)
+      const genre = room.genreLock || shuffleArray(profile.genres)[0] || 'pop'
 
-    tracks = filterVetoed(tracks, vetoedTrackIds)
-    tracks = shuffleArray(tracks).slice(0, 10)
+      const searchRes = await axios.get('https://api.spotify.com/v1/search', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { q: genre, type: 'track', limit: '10' }
+      })
 
-    res.json({ tracks, mood: room.negotiatedMood })
+      let searchTracks = searchRes.data.tracks.items
+        .filter(t => !vetoedTrackIds.includes(t.id))
+        .filter(t => !finalTracks.find(f => f.id === t.id))
+        .map(t => ({
+          id: t.id,
+          name: t.name,
+          artist: t.artists.map(a => a.name).join(', '),
+          albumArt: t.album.images?.[0]?.url || null,
+          uri: t.uri,
+          duration_ms: t.duration_ms,
+          source: 'discovery'
+        }))
+
+      searchTracks = shuffleArray(searchTracks).slice(0, fromSearchCount)
+      finalTracks.push(...searchTracks)
+
+    } catch (searchErr) {
+      console.error('Search fallback failed:', searchErr.message)
+    }
+
+    // if pool was empty just use search for everything
+    if (finalTracks.length === 0) {
+      const profile = getQuadrantProfile(quadrant)
+      const genre = room.genreLock || shuffleArray(profile.genres)[0] || 'pop'
+
+      const fallbackRes = await axios.get('https://api.spotify.com/v1/search', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { q: genre, type: 'track', limit: '10' }
+      })
+
+      finalTracks = shuffleArray(fallbackRes.data.tracks.items)
+        .slice(0, BATCH_SIZE)
+        .map(t => ({
+          id: t.id,
+          name: t.name,
+          artist: t.artists.map(a => a.name).join(', '),
+          albumArt: t.album.images?.[0]?.url || null,
+          uri: t.uri,
+          duration_ms: t.duration_ms,
+          source: 'search_fallback'
+        }))
+    }
+
+    // final shuffle so pool and discovery tracks are mixed
+    finalTracks = shuffleArray(finalTracks)
+
+    res.json({ tracks: finalTracks, mood: room.negotiatedMood })
 
   } catch (err) {
-    console.error('Recommendations error:', err.response?.status, err.response?.data)
+    console.error('Recommendations error:', err.response?.status, err.response?.data || err.message)
     res.status(500).json({ error: 'Failed to get recommendations' })
   }
 }

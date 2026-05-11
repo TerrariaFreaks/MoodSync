@@ -100,12 +100,51 @@ export function useSpotify() {
     }
   }, [roomCode, tokens])
 
+  // ─────────────────────────────────────────────
+  // contribute playlists to room pool
+  // ─────────────────────────────────────────────
+  const contributePlaylists = useCallback(async (displayName, accessToken) => {
+    try {
+      const headers = {
+        'x-access-token': accessToken || tokens?.accessToken
+      }
+
+      const res = await axios.post(
+        `${SERVER}/api/rooms/${roomCode}/contribute-playlists`,
+        { displayName },
+        { withCredentials: true, headers }
+      )
+
+      console.log(`Pool contribution: +${res.data.tracksAdded} tracks from ${displayName}`)
+      return res.data
+
+    } catch (err) {
+      console.error('Failed to contribute playlists:', err.message)
+      return null
+    }
+  }, [roomCode, tokens])
+
+  const getPoolStats = useCallback(async () => {
+    try {
+      const res = await axios.get(
+        `${SERVER}/api/rooms/${roomCode}/pool-stats`,
+        { withCredentials: true, headers: authHeaders }
+      )
+      return res.data
+    } catch (err) {
+      console.error('Failed to get pool stats:', err.message)
+      return null
+    }
+  }, [roomCode, tokens])
+
   return {
     getRecommendations,
     addToQueue,
     searchTracks,
     getPlayer,
     endRoom,
-    setGenreLock
+    setGenreLock,
+    contributePlaylists,
+    getPoolStats
   }
 }
